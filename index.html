@@ -9,7 +9,7 @@
     <style>
         body { font-family: Arial, sans-serif; text-align: center; background: #121212; color: #fff; margin-top: 20px; padding: 10px; }
         .video-container { position: relative; display: inline-block; }
-        video, canvas { display: block; margin: 10px auto; border-radius: 10px; max-width: 100%; border: 2px solid #333; }
+        video, canvas { display: block; margin: 10px auto; border-radius: 10px; max-width: 100%; border: 2px solid #333; background: #222; }
         button { padding: 12px 20px; font-size: 15px; background: #27ae60; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; margin: 5px; }
         button:hover { background: #219653; }
         .lang-btn { background: #34495e; font-size: 13px; padding: 8px 12px; }
@@ -31,7 +31,7 @@
     <p id="instruction">步驟 1：請看鏡頭並點擊按鈕來註冊主人面部。</p>
 
     <div class="video-container">
-        <video id="webcam" autoplay playsinline width="320" height="240"></video>
+        <video id="webcam" autoplay playsinline muted width="320" height="240"></video>
     </div>
     <canvas id="canvas" width="320" height="240" style="display:none;"></canvas>
 
@@ -40,7 +40,7 @@
         <button id="btnArm" onclick="armSystem()" style="background: #e74c3c; display:none;">開啟防盜模式</button>
     </div>
 
-    <div id="status">正在加載人臉識別模型...</div>
+    <div id="status">正在開啟相機...</div>
 
     <script>
         const video = document.getElementById('webcam');
@@ -50,31 +50,32 @@
         const btnArm = document.getElementById('btnArm');
 
         // 👉 請將下方引號內的網址替換成你的 Discord Webhook 網址
-        const DISCORD_WEBHOOK_URL = "YOUR_DISCORD_WEBHOOK_URL_HERE";
+        const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1558912856559460404/ARuaFNfuLUFYp3kS_XOf8NQrI85ZH0Nkw1FEHxvLrjxPbC2KDgfGAduANrgrV74Y4A57";
 
         let labeledFaceDescriptors = null;
         let faceMatcher = null;
         let isArmed = false;
         let lastSentTime = 0;
         let currentLang = 'zh'; // 預設為繁體中文
+        let modelsLoaded = false;
 
         // 多語言字典
         const langData = {
             zh: {
                 title: "智能防盜監控系統",
                 heading: "🛡️ 智能防盜監控站",
-                step1: "步驟 1：請看鏡頭并點擊按鈕註冊主人面部。",
+                step1: "步驟 1：請看鏡頭並點擊按鈕註冊主人面部。",
                 step2: "步驟 2：點擊下方按鈕開啟防盜警戒模式。",
                 armedDesc: "系統運行中。若檢測到陌生人，將自動拍照並發送至 Discord。",
                 btnTrain: "註冊為主人",
                 btnArm: "開啟防盜模式",
-                loadingModels: "正在加載人臉識別模型...",
-                cameraReady: "鏡頭已就緒，請註冊主人面部！",
+                cameraReady: "相機已就緒，正在加載 AI 模型...",
+                modelReady: "AI 模型加載完成！請註冊主人面部。",
                 scanning: "正在掃描主人面部...",
                 noFace: "未檢測到人臉！請靠近鏡頭。",
                 trainSuccess: "✅ 主人面部註冊成功！",
                 armedStatus: "🚨 防盜警戒已開啟！正在監控中...",
-                strangerAlert: "🚨 發現陌生人！正在拍照并發送警告...",
+                strangerAlert: "🚨 發現陌生人！正在拍照並發送警告...",
                 sentSuccess: "🚨 陌生人照片已成功發送至 Discord！繼續監控...",
                 netError: "❌ 網絡錯誤: "
             },
@@ -86,8 +87,8 @@
                 armedDesc: "Hệ thống đang chạy ngầm. Nếu có người lạ xuất hiện, ảnh sẽ tự động gửi về Discord.",
                 btnTrain: "Đăng Ký Tôi Là Chủ Nhân",
                 btnArm: "Bật Chế Độ Chống Trộm",
-                loadingModels: "Đang tải mô hình nhận diện khuôn mặt...",
-                cameraReady: "Camera đã sẵn sàng. Hãy đăng ký khuôn mặt chủ nhân!",
+                cameraReady: "Camera đã sẵn sàng, đang tải mô hình AI...",
+                modelReady: "Đã tải xong mô hình AI! Hãy đăng ký khuôn mặt chủ nhân.",
                 scanning: "Đang quét khuôn mặt chủ nhân...",
                 noFace: "Không tìm thấy khuôn mặt! Hãy đưa mặt lại gần camera hơn.",
                 trainSuccess: "✅ Đã ghi nhận khuôn mặt chủ nhân thành công!",
@@ -104,8 +105,8 @@
                 armedDesc: "System is running. If a stranger appears, a snapshot will be sent to Discord.",
                 btnTrain: "Register As Owner",
                 btnArm: "Arm Security System",
-                loadingModels: "Loading face recognition AI models...",
-                cameraReady: "Camera ready. Please register the owner's face!",
+                cameraReady: "Camera ready, loading AI models...",
+                modelReady: "AI models loaded! Please register the owner's face.",
                 scanning: "Scanning owner's face...",
                 noFace: "No face detected! Please move closer to the camera.",
                 trainSuccess: "✅ Owner face registered successfully!",
@@ -124,7 +125,6 @@
             btnArm.innerText = langData[lang].btnArm;
             if (!faceMatcher) {
                 document.getElementById('instruction').innerText = langData[lang].step1;
-                statusDiv.innerText = langData[lang].cameraReady;
             } else if (!isArmed) {
                 document.getElementById('instruction').innerText = langData[lang].step2;
             } else {
@@ -132,41 +132,61 @@
             }
         }
 
-        // 加載 AI 模型
-        Promise.all([
-            faceapi.nets.ssdMobilenetv1.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
-            faceapi.nets.faceLandmarkNet.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
-            faceapi.nets.faceRecognitionNet.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models')
-        ]).then(startVideo);
-
-        function startVideo() {
-            navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
-                .then(stream => {
-                    video.srcObject = stream;
-                    statusDiv.innerText = langData[currentLang].cameraReady;
-                })
-                .catch(err => {
-                    statusDiv.innerText = "Error: " + err;
-                });
+        // 1. Kích hoạt camera ngay lập tức để không bị đen màn hình
+        async function startVideo() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+                video.srcObject = stream;
+                statusDiv.innerText = langData[currentLang].cameraReady;
+            } catch (err) {
+                statusDiv.innerText = "Camera Error: " + err;
+            }
         }
 
+        // 2. Tải mô hình AI chạy ngầm
+        async function loadModels() {
+            try {
+                const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
+                await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
+                await faceapi.nets.faceLandmarkNet.loadFromUri(MODEL_URL);
+                await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+                modelsLoaded = true;
+                statusDiv.innerText = langData[currentLang].modelReady;
+            } catch (err) {
+                statusDiv.innerText = "AI Model Load Error: " + err;
+            }
+        }
+
+        // Khởi động song song ngay khi mở trang
+        startVideo();
+        loadModels();
+
         async function registerOwner() {
-            statusDiv.innerText = langData[currentLang].scanning;
-            const detection = await faceapi.detectSingleFace(video).withFaceLandmarks().withFaceDescriptor();
-            
-            if (!detection) {
-                alert(langData[currentLang].noFace);
-                statusDiv.innerText = langData[currentLang].noFace;
+            if (!modelsLoaded) {
+                alert("AI models are still loading, please wait a few seconds!");
                 return;
             }
-
-            labeledFaceDescriptors = new faceapi.LabeledFaceDescriptors('Owner', [detection.descriptor]);
-            faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, 0.6);
+            statusDiv.innerText = langData[currentLang].scanning;
             
-            statusDiv.innerText = langData[currentLang].trainSuccess;
-            btnTrain.style.display = "none";
-            btnArm.style.display = "inline-block";
-            document.getElementById('instruction').innerText = langData[currentLang].step2;
+            try {
+                const detection = await faceapi.detectSingleFace(video).withFaceLandmarks().withFaceDescriptor();
+                
+                if (!detection) {
+                    alert(langData[currentLang].noFace);
+                    statusDiv.innerText = langData[currentLang].modelReady;
+                    return;
+                }
+
+                labeledFaceDescriptors = new faceapi.LabeledFaceDescriptors('Owner', [detection.descriptor]);
+                faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, 0.6);
+                
+                statusDiv.innerText = langData[currentLang].trainSuccess;
+                btnTrain.style.display = "none";
+                btnArm.style.display = "inline-block";
+                document.getElementById('instruction').innerText = langData[currentLang].step2;
+            } catch (err) {
+                statusDiv.innerText = "Error during registration: " + err;
+            }
         }
 
         function armSystem() {
@@ -176,27 +196,31 @@
             document.getElementById('instruction').innerText = langData[currentLang].armedDesc;
 
             setInterval(async () => {
-                if (!isArmed || !faceMatcher) return;
+                if (!isArmed || !faceMatcher || !modelsLoaded) return;
 
-                const detections = await faceapi.detectAllFaces(video).withFaceLandmarks().withFaceDescriptors();
-                
-                if (detections.length > 0) {
-                    let hasStranger = false;
-                    for (const det of detections) {
-                        const bestMatch = faceMatcher.findBestMatch(det.descriptor);
-                        if (bestMatch.label === 'unknown') {
-                            hasStranger = true;
-                            break;
+                try {
+                    const detections = await faceapi.detectAllFaces(video).withFaceLandmarks().withFaceDescriptors();
+                    
+                    if (detections.length > 0) {
+                        let hasStranger = false;
+                        for (const det of detections) {
+                            const bestMatch = faceMatcher.findBestMatch(det.descriptor);
+                            if (bestMatch.label === 'unknown') {
+                                hasStranger = true;
+                                break;
+                            }
+                        }
+
+                        if (hasStranger) {
+                            let currentTime = Date.now();
+                            if (currentTime - lastSentTime > 15000) { // 15秒冷卻時間
+                                lastSentTime = currentTime;
+                                takePhotoAndSend();
+                            }
                         }
                     }
-
-                    if (hasStranger) {
-                        let currentTime = Date.now();
-                        if (currentTime - lastSentTime > 15000) { // 15秒冷卻時間避免洗版
-                            lastSentTime = currentTime;
-                            takePhotoAndSend();
-                        }
-                    }
+                } catch (e) {
+                    console.log("Detection error: ", e);
                 }
             }, 1000);
         }
