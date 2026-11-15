@@ -1,75 +1,229 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hệ Thống Chống Trộm iPhone</title>
+    <title id="page-title">智能防盜監控系統</title>
+    <!-- 載入 face-api.js 人臉識別庫 -->
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/face-api.js/0.22.2/face-api.min.js"></script>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; background: #121212; color: #fff; margin-top: 40px; padding: 10px; }
-        video, canvas { display: block; margin: 15px auto; border-radius: 10px; max-width: 100%; border: 2px solid #333; }
-        button { padding: 14px 28px; font-size: 16px; background: #e74c3c; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
-        button:hover { background: #c0392b; }
-        #status { margin-top: 15px; font-weight: bold; color: #f1c40f; font-size: 15px; }
+        body { font-family: Arial, sans-serif; text-align: center; background: #121212; color: #fff; margin-top: 20px; padding: 10px; }
+        .video-container { position: relative; display: inline-block; }
+        video, canvas { display: block; margin: 10px auto; border-radius: 10px; max-width: 100%; border: 2px solid #333; }
+        button { padding: 12px 20px; font-size: 15px; background: #27ae60; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; margin: 5px; }
+        button:hover { background: #219653; }
+        .lang-btn { background: #34495e; font-size: 13px; padding: 8px 12px; }
+        .lang-btn:hover { background: #2c3e50; }
+        #status { margin-top: 15px; font-weight: bold; color: #f1c40f; font-size: 16px; }
+        .controls { margin-top: 10px; }
     </style>
 </head>
 <body>
 
-    <h2>🚨 Trạm Giám Sát Chống Trộm iPhone</h2>
-    <p>Đặt cố định iPhone, hướng camera về phía khu vực cần canh gác.</p>
+    <!-- 多語言切換按鈕 -->
+    <div>
+        <button class="lang-btn" onclick="switchLanguage('zh')">🇹🇼 繁體中文</button>
+        <button class="lang-btn" onclick="switchLanguage('vi')">🇻🇳 Tiếng Việt</button>
+        <button class="lang-btn" onclick="switchLanguage('en')">🇬🇧 English</button>
+    </div>
 
-    <!-- Khung hiển thị camera trực tiếp -->
-    <video id="webcam" autoplay playsinline width="320" height="240"></video>
+    <h2 id="main-heading">🛡️ 智能防盜監控站</h2>
+    <p id="instruction">步驟 1：請看鏡頭並點擊按鈕來註冊主人面部。</p>
+
+    <div class="video-container">
+        <video id="webcam" autoplay playsinline width="320" height="240"></video>
+    </div>
     <canvas id="canvas" width="320" height="240" style="display:none;"></canvas>
 
-    <br>
-    <button onclick="chupVaGui()">Chụp & Gửi Cảnh Báo Ngay</button>
-    <div id="status">Đang khởi động camera...</div>
+    <div class="controls">
+        <button id="btnTrain" onclick="registerOwner()">註冊為主人</button>
+        <button id="btnArm" onclick="armSystem()" style="background: #e74c3c; display:none;">開啟防盜模式</button>
+    </div>
+
+    <div id="status">正在加載人臉識別模型...</div>
 
     <script>
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('canvas');
         const statusDiv = document.getElementById('status');
+        const btnTrain = document.getElementById('btnTrain');
+        const btnArm = document.getElementById('btnArm');
 
-        // 👉 DÁN ĐƯỜNG DẪN DISCORD WEBHOOK CỦA BẠN VÀO DƯỚI ĐÂY (GIỮ NGUYÊN DẤU NHÁY KÉP)
-        const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1558912856559460404/ARuaFNfuLUFYp3kS_XOf8NQrI85ZH0Nkw1FEHxvLrjxPbC2KDgfGAduANrgrV74Y4A57";
+        // 👉 請將下方引號內的網址替換成你的 Discord Webhook 網址
+        const DISCORD_WEBHOOK_URL = "YOUR_DISCORD_WEBHOOK_URL_HERE";
 
-        // Tự động bật camera trước của iPhone khi mở trang web
-        navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
-            .then(stream => {
-                video.srcObject = stream;
-                statusDiv.innerText = "Camera đã sẵn sàng hoạt động!";
-            })
-            .catch(err => {
-                statusDiv.innerText = "Lỗi: Không thể truy cập camera (" + err + "). Hãy kiểm tra quyền Safari.";
-            });
+        let labeledFaceDescriptors = null;
+        let faceMatcher = null;
+        let isArmed = false;
+        let lastSentTime = 0;
+        let currentLang = 'zh'; // 預設為繁體中文
 
-        function chupVaGui() {
-            statusDiv.innerText = "Đang chụp ảnh...";
+        // 多語言字典
+        const langData = {
+            zh: {
+                title: "智能防盜監控系統",
+                heading: "🛡️ 智能防盜監控站",
+                step1: "步驟 1：請看鏡頭并點擊按鈕註冊主人面部。",
+                step2: "步驟 2：點擊下方按鈕開啟防盜警戒模式。",
+                armedDesc: "系統運行中。若檢測到陌生人，將自動拍照並發送至 Discord。",
+                btnTrain: "註冊為主人",
+                btnArm: "開啟防盜模式",
+                loadingModels: "正在加載人臉識別模型...",
+                cameraReady: "鏡頭已就緒，請註冊主人面部！",
+                scanning: "正在掃描主人面部...",
+                noFace: "未檢測到人臉！請靠近鏡頭。",
+                trainSuccess: "✅ 主人面部註冊成功！",
+                armedStatus: "🚨 防盜警戒已開啟！正在監控中...",
+                strangerAlert: "🚨 發現陌生人！正在拍照并發送警告...",
+                sentSuccess: "🚨 陌生人照片已成功發送至 Discord！繼續監控...",
+                netError: "❌ 網絡錯誤: "
+            },
+            vi: {
+                title: "Hệ Thống Chống Trộm Thông Minh",
+                heading: "🛡️ Trạm Chống Trộm Thông Minh",
+                step1: "Bước 1: Nhìn vào camera và bấm nút để lưu khuôn mặt chủ nhân.",
+                step2: "Bước 2: Bấm nút bên dưới để kích hoạt hệ thống gác cửa.",
+                armedDesc: "Hệ thống đang chạy ngầm. Nếu có người lạ xuất hiện, ảnh sẽ tự động gửi về Discord.",
+                btnTrain: "Đăng Ký Tôi Là Chủ Nhân",
+                btnArm: "Bật Chế Độ Chống Trộm",
+                loadingModels: "Đang tải mô hình nhận diện khuôn mặt...",
+                cameraReady: "Camera đã sẵn sàng. Hãy đăng ký khuôn mặt chủ nhân!",
+                scanning: "Đang quét khuôn mặt chủ nhân...",
+                noFace: "Không tìm thấy khuôn mặt! Hãy đưa mặt lại gần camera hơn.",
+                trainSuccess: "✅ Đã ghi nhận khuôn mặt chủ nhân thành công!",
+                armedStatus: "🚨 HỆ THỐNG CHỐNG TRỘM ĐANG BẬT! Đang giám sát...",
+                strangerAlert: "🚨 PHÁT HIỆN NGƯỜI LẠ! Đang chụp ảnh và gửi cảnh báo...",
+                sentSuccess: "🚨 Đã gửi ảnh kẻ lạ về Discord thành công! Tiếp tục giám sát...",
+                netError: "❌ Lỗi mạng: "
+            },
+            en: {
+                title: "Smart Anti-Theft System",
+                heading: "🛡️ Smart Anti-Theft Station",
+                step1: "Step 1: Look at the camera and click the button to register owner face.",
+                step2: "Step 2: Click the button below to arm the security system.",
+                armedDesc: "System is running. If a stranger appears, a snapshot will be sent to Discord.",
+                btnTrain: "Register As Owner",
+                btnArm: "Arm Security System",
+                loadingModels: "Loading face recognition AI models...",
+                cameraReady: "Camera ready. Please register the owner's face!",
+                scanning: "Scanning owner's face...",
+                noFace: "No face detected! Please move closer to the camera.",
+                trainSuccess: "✅ Owner face registered successfully!",
+                armedStatus: "🚨 ANTI-THEFT SYSTEM ARMED! Monitoring...",
+                strangerAlert: "🚨 STRANGER DETECTED! Taking photo and sending alert...",
+                sentSuccess: "🚨 Stranger photo sent to Discord! Continuing surveillance...",
+                netError: "❌ Network error: "
+            }
+        };
+
+        function switchLanguage(lang) {
+            currentLang = lang;
+            document.getElementById('page-title').innerText = langData[lang].title;
+            document.getElementById('main-heading').innerText = langData[lang].heading;
+            btnTrain.innerText = langData[lang].btnTrain;
+            btnArm.innerText = langData[lang].btnArm;
+            if (!faceMatcher) {
+                document.getElementById('instruction').innerText = langData[lang].step1;
+                statusDiv.innerText = langData[lang].cameraReady;
+            } else if (!isArmed) {
+                document.getElementById('instruction').innerText = langData[lang].step2;
+            } else {
+                document.getElementById('instruction').innerText = langData[lang].armedDesc;
+            }
+        }
+
+        // 加載 AI 模型
+        Promise.all([
+            faceapi.nets.ssdMobilenetv1.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
+            faceapi.nets.faceLandmarkNet.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
+            faceapi.nets.faceRecognitionNet.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models')
+        ]).then(startVideo);
+
+        function startVideo() {
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+                .then(stream => {
+                    video.srcObject = stream;
+                    statusDiv.innerText = langData[currentLang].cameraReady;
+                })
+                .catch(err => {
+                    statusDiv.innerText = "Error: " + err;
+                });
+        }
+
+        async function registerOwner() {
+            statusDiv.innerText = langData[currentLang].scanning;
+            const detection = await faceapi.detectSingleFace(video).withFaceLandmarks().withFaceDescriptor();
+            
+            if (!detection) {
+                alert(langData[currentLang].noFace);
+                statusDiv.innerText = langData[currentLang].noFace;
+                return;
+            }
+
+            labeledFaceDescriptors = new faceapi.LabeledFaceDescriptors('Owner', [detection.descriptor]);
+            faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, 0.6);
+            
+            statusDiv.innerText = langData[currentLang].trainSuccess;
+            btnTrain.style.display = "none";
+            btnArm.style.display = "inline-block";
+            document.getElementById('instruction').innerText = langData[currentLang].step2;
+        }
+
+        function armSystem() {
+            isArmed = true;
+            btnArm.style.display = "none";
+            statusDiv.innerText = langData[currentLang].armedStatus;
+            document.getElementById('instruction').innerText = langData[currentLang].armedDesc;
+
+            setInterval(async () => {
+                if (!isArmed || !faceMatcher) return;
+
+                const detections = await faceapi.detectAllFaces(video).withFaceLandmarks().withFaceDescriptors();
+                
+                if (detections.length > 0) {
+                    let hasStranger = false;
+                    for (const det of detections) {
+                        const bestMatch = faceMatcher.findBestMatch(det.descriptor);
+                        if (bestMatch.label === 'unknown') {
+                            hasStranger = true;
+                            break;
+                        }
+                    }
+
+                    if (hasStranger) {
+                        let currentTime = Date.now();
+                        if (currentTime - lastSentTime > 15000) { // 15秒冷卻時間避免洗版
+                            lastSentTime = currentTime;
+                            takePhotoAndSend();
+                        }
+                    }
+                }
+            }, 1000);
+        }
+
+        function takePhotoAndSend() {
+            statusDiv.innerText = langData[currentLang].strangerAlert;
             const context = canvas.getContext('2d');
             context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-            // Chuyển khung hình canvas thành tệp ảnh JPEG
             canvas.toBlob(blob => {
                 const formData = new FormData();
-                formData.append('file', blob, 'ke_la_mat.jpg');
+                formData.append('file', blob, 'stranger.jpg');
                 formData.append('payload_json', JSON.stringify({
-                    content: "🚨 **CẢNH BÁO CHỐNG TRỘM:** Hệ thống camera iPhone vừa ghi nhận hình ảnh kẻ lạ tiếp cận!"
+                    content: "🚨 **防盜警報：** 偵測到非主人的陌生人靠近！時間：" + new Date().toLocaleTimeString()
                 }));
 
-                statusDiv.innerText = "Đang đẩy ảnh về Discord...";
                 fetch(DISCORD_WEBHOOK_URL, {
                     method: 'POST',
                     body: formData
                 })
                 .then(response => {
                     if (response.ok) {
-                        statusDiv.innerText = "✅ Đã gửi ảnh cảnh báo về Discord thành công!";
-                    } else {
-                        statusDiv.innerText = "❌ Gửi thất bại! Kiểm tra lại Link Webhook.";
+                        statusDiv.innerText = langData[currentLang].sentSuccess;
                     }
                 })
                 .catch(error => {
-                    statusDiv.innerText = "❌ Lỗi mạng: " + error;
+                    statusDiv.innerText = langData[currentLang].netError + error;
                 });
             }, 'image/jpeg');
         }
