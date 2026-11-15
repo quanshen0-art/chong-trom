@@ -3,7 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title id="page-title">智能防盜監控系統</title>
+    <title id="page-title">智能防盜監控系統 - 骨骼識別</title>
+    <!-- Tải thư viện MediaPipe Pose và Camera Utils từ Google CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
     <style>
         body { font-family: Arial, sans-serif; text-align: center; background: #121212; color: #fff; margin-top: 20px; padding: 10px; }
         .video-container { position: relative; display: inline-block; }
@@ -14,7 +17,6 @@
         .lang-btn:hover { background: #2c3e50; }
         #status { margin-top: 15px; font-weight: bold; color: #f1c40f; font-size: 16px; }
         .controls { margin-top: 10px; }
-        #ownerPreview { width: 80px; height: 60px; border-radius: 5px; border: 2px solid #27ae60; display: none; margin: 5px auto; }
     </style>
 </head>
 <body>
@@ -26,91 +28,83 @@
         <button class="lang-btn" onclick="switchLanguage('en')">🇬🇧 English</button>
     </div>
 
-    <h2 id="main-heading">🛡️ 智能防盜監控站</h2>
-    <p id="instruction">步驟 1：請面向相機並點擊按鈕拍下您的照片作為主人樣板。</p>
+    <h2 id="main-heading">🛡️ 智能防盜監控站 (骨骼姿態識別)</h2>
+    <p id="instruction">步驟 1：請站在鏡頭前，點擊按鈕記錄您的身體骨骼比例作為主人。</p>
 
     <div class="video-container">
-        <video id="webcam" autoplay playsinline muted width="320" height="240"></video>
-        <!-- Canvas ẩn dùng để so sánh pixel -->
-        <canvas id="hiddenCanvas" width="160" height="120" style="display:none;"></canvas>
+        <video id="webcam" autoplay playsinline muted width="320" height="240" style="display:none;"></video>
+        <canvas id="output_canvas" width="320" height="240"></canvas>
     </div>
-    <!-- Hiển thị ảnh mẫu chủ nhân đã chụp -->
-    <div>
-        <img id="ownerPreview" alt="Owner Sample">
-    </div>
-    <canvas id="canvas" width="320" height="240" style="display:none;"></canvas>
 
     <div class="controls">
-        <button id="btnTrain" onclick="captureOwner()">拍攝並註冊主人照片</button>
-        <button id="btnArm" onclick="toggleSystem()" style="background: #e74c3c; display:none;">開啟防盜警戒模式</button>
+        <button id="btnTrain" onclick="registerOwnerPose()">註冊主人體 態 (Register Owner)</button>
+        <button id="btnArm" onclick="toggleSystem()" style="background: #e74c3c; display:none;">開啟防盜警戒 (Arm System)</button>
     </div>
 
-    <div id="status">相機已就緒，請註冊主人樣板！</div>
+    <div id="status">正在初始化相機與骨骼識別模型...</div>
 
     <script>
-        const video = document.getElementById('webcam');
-        const canvas = document.getElementById('canvas');
-        const hiddenCanvas = document.getElementById('hiddenCanvas');
-        const hCtx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
         const statusDiv = document.getElementById('status');
         const btnTrain = document.getElementById('btnTrain');
         const btnArm = document.getElementById('btnArm');
-        const ownerPreview = document.getElementById('ownerPreview');
 
         // 👉 DÁN ĐƯỜNG DẪN DISCORD WEBHOOK CỦA BẠN VÀO ĐÂY
         const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1558912856559460404/ARuaFNfuLUFYp3kS_XOf8NQrI85ZH0Nkw1FEHxvLrjxPbC2KDgfGAduANrgrV74Y4A57";
 
-        let ownerPixels = null;
+        let ownerLandmarks = null;
         let isArmed = false;
         let lastSentTime = 0;
-        let watchInterval = null;
+        let currentPose = null;
         let currentLang = 'zh';
 
         const langData = {
             zh: {
-                title: "智能防盜監控系統",
-                heading: "🛡️ 智能防盜監控站",
-                step1: "步驟 1：請面向相機並點擊按鈕拍下您的照片作為主人樣板。",
+                title: "智能防盜監控系統 - 骨骼識別",
+                heading: "🛡️ 智能防盜監控站 (骨骼姿態識別)",
+                step1: "步驟 1：請站在鏡頭前，點擊按鈕記錄您的身體骨骼比例作為主人。",
                 step2: "步驟 2：點擊下方按鈕開啟防盜警戒模式。",
-                armedDesc: "🚨 防盜警戒中！檢測到非主人（陌生人）將自動拍照發送至 Discord。",
-                btnTrain: "拍攝並註冊主人照片",
-                btnArmOn: "開啟防盜警戒模式",
-                btnArmOff: "關閉防盜模式",
-                cameraReady: "相機已就緒，請拍攝主人樣板！",
-                trainSuccess: "✅ 主人照片註冊成功！現在可以開啟防盜模式了。",
-                strangerAlert: "🚨 發現陌生人！正在拍照並發送警告...",
-                sentSuccess: "🚨 陌生人照片已成功發送至 Discord！繼續監控...",
-                netError: "❌ 網絡錯誤: "
+                armedDesc: "🚨 防盜警戒中！系統正通過骨骼體態識別主人，陌生人靠近將自動拍照發送至 Discord。",
+                btnTrain: "註冊主人體態",
+                btnArmOn: "開啟防盜警戒",
+                btnArmOff: "關閉防盜警戒",
+                ready: "模型已就緒！請站在鏡頭前點擊註冊主人。",
+                trainSuccess: "✅ 主人體態記錄成功！現在可以開啟防盜警戒。",
+                strangerAlert: "🚨 發現陌生人體2態！正在拍照並發送警告...",
+                sentSuccess: "🚨 陌生人照片已成功發送至 Discord！",
+                noBody: "未檢測到身體！請退後一步讓鏡頭看清全身或半身。"
             },
             vi: {
-                title: "Hệ Thống Chống Trộm Thông Minh",
-                heading: "🛡️ Trạm Chống Trộm Thông Minh",
-                step1: "Bước 1: Nhìn vào camera và bấm nút để chụp ảnh mẫu chủ nhân.",
+                title: "Hệ Thống Chống Trộm - Nhận Diện Khung Xương",
+                heading: "🛡️ Trạm Chống Trộm (Nhận Diện Khung Xương Cơ Thể)",
+                step1: "Bước 1: Đứng trước camera và bấm nút để ghi nhận tỷ lệ khung xương chủ nhân.",
                 step2: "Bước 2: Bấm nút bên dưới để bật chế độ cảnh báo chống trộm.",
-                armedDesc: "🚨 ĐANG CẠNH GÁC! Nếu phát hiện người lạ khác với mẫu sẽ chụp ảnh gửi Discord.",
-                btnTrain: "Chụp Ảnh Mẫu Chủ Nhân",
+                armedDesc: "🚨 ĐANG CẠNH GÁC! Hệ thống nhận diện vóc dáng chủ nhân, phát hiện người lạ sẽ gửi ảnh về Discord.",
+                btnTrain: "Đăng Ký Vóc Dáng Chủ Nhân",
                 btnArmOn: "Bật Chế Độ Chống Trộm",
                 btnArmOff: "Tắt Chế Độ Chống Trộm",
-                cameraReady: "Camera đã sẵn sàng, hãy chụp ảnh mẫu chủ nhân!",
-                trainSuccess: "✅ Đã lưu ảnh mẫu chủ nhân thành công! Giờ có thể bật chống trộm.",
-                strangerAlert: "🚨 PHÁT HIỆN NGƯỜI LẠ! Đang chụp ảnh và gửi cảnh báo...",
-                sentSuccess: "🚨 Đã gửi ảnh kẻ lạ về Discord thành công! Tiếp tục giám sát...",
-                netError: "❌ Lỗi mạng: "
+                ready: "Đã sẵn sàng! Hãy đứng trước camera và bấm đăng ký.",
+                trainSuccess: "✅ Đã ghi nhận vóc dáng thành công! Có thể bật chống trộm.",
+                strangerAlert: "🚨 PHÁT HIỆN NGƯỜI LẠ (Vóc dáng khác)! Đang chụp ảnh gửi Discord...",
+                sentSuccess: "🚨 Đã gửi ảnh kẻ lạ về Discord thành công!",
+                noBody: "Không tìm thấy cơ thể! Hãy lùi ra xa một chút để camera thấy rõ."
             },
             en: {
-                title: "Smart Anti-Theft System",
-                heading: "🛡️ Smart Anti-Theft Station",
-                step1: "Step 1: Look at the camera and take a photo of yourself as the owner sample.",
-                step2: "Step 2: Click the button below to arm the security system.",
-                armedDesc: "🚨 ARMED! Strangers differing from the owner sample will trigger Discord snapshot.",
-                btnTrain: "Capture Owner Photo",
+                title: "Smart Anti-Theft - Pose Detection",
+                heading: "🛡️ Smart Anti-Theft Station (Pose Detection)",
+                step1: "Step 1: Stand in front of the camera and register your body pose as owner.",
+                step2: "Step 2: Click the button below to arm the system.",
+                armedDesc: "🚨 ARMED! Tracking body pose. Strangers will trigger Discord snapshot.",
+                btnTrain: "Register Owner Pose",
                 btnArmOn: "Arm Security System",
                 btnArmOff: "Disarm System",
-                cameraReady: "Camera ready, please capture owner sample!",
-                trainSuccess: "✅ Owner photo registered successfully! You can now arm the system.",
+                ready: "Models ready! Stand in front of camera and register.",
+                trainSuccess: "✅ Owner pose registered successfully! You can now arm.",
                 strangerAlert: "🚨 STRANGER DETECTED! Taking photo and sending alert...",
-                sentSuccess: "🚨 Snapshot sent to Discord! Continuing surveillance...",
-                netError: "❌ Network error: "
+                sentSuccess: "🚨 Snapshot sent to Discord!",
+                noBody: "No body detected! Step back so the camera can see you."
             }
         };
 
@@ -122,7 +116,7 @@
             if (isArmed) {
                 btnArm.innerText = langData[lang].btnArmOff;
                 document.getElementById('instruction').innerText = langData[lang].armedDesc;
-            } else if (ownerPixels) {
+            } else if (ownerLandmarks) {
                 document.getElementById('instruction').innerText = langData[lang].step2;
                 btnArm.innerText = langData[lang].btnArmOn;
             } else {
@@ -130,36 +124,62 @@
             }
         }
 
-        // Bật camera ngay lập tức
-        async function startVideo() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
-                video.srcObject = stream;
-                statusDiv.innerText = langData[currentLang].cameraReady;
-            } catch (err) {
-                statusDiv.innerText = "Camera Error: " + err;
+        // Khởi động MediaPipe Pose
+        const pose = new Pose({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        });
+
+        pose.setOptions({
+            modelComplexity: 1,
+            smoothLandmarks: true,
+            enableSegmentation: false,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        pose.onResults(onResults);
+
+        function onResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            // Hiển thị khung hình camera lên canvas
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.poseLandmarks) {
+                currentPose = results.poseLandmarks;
+                // Vẽ khung xương lên màn hình để trực quan
+                drawConnectors(canvasCtx, currentPose, POSE_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+                drawLandmarks(canvasCtx, currentPose, {color: '#FF0000', lineWidth: 1});
+
+                // Nếu hệ thống đang bật và đã đăng ký chủ nhân -> tiến hành so sánh vóc dáng
+                if (isArmed && ownerLandmarks) {
+                    checkStranger(currentPose);
+                }
             }
+            canvasCtx.restore();
         }
 
-        startVideo();
+        // Bật camera
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await pose.send({image: videoElement});
+            },
+            width: 320,
+            height: 240
+        });
 
-        // Chụp và lưu ảnh mẫu chủ nhân
-        function captureOwner() {
-            hCtx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-            const imgData = hCtx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height);
-            ownerPixels = imgData.data;
+        camera.start().then(() => {
+            statusDiv.innerText = langData[currentLang].ready;
+        });
 
-            // Hiển thị ảnh mẫu nhỏ lên giao diện
-            canvas.width = 160;
-            canvas.height = 120;
-            const cCtx = canvas.getContext('2d');
-            cCtx.drawImage(hiddenCanvas, 0, 0);
-            ownerPreview.src = canvas.toDataURL();
-            ownerPreview.style.display = "block";
-            // Trả lại kích thước chuẩn cho canvas chụp ảnh gửi discord
-            canvas.width = 320;
-            canvas.height = 240;
-
+        // 1. Đăng ký vóc dáng chủ nhân
+        function registerOwnerPose() {
+            if (!currentPose) {
+                alert(langData[currentLang].noBody);
+                return;
+            }
+            // Lưu lại tọa độ các khớp xương chuẩn của chủ nhân
+            ownerLandmarks = JSON.parse(JSON.stringify(currentPose));
             statusDiv.innerText = langData[currentLang].trainSuccess;
             btnTrain.style.display = "none";
             btnArm.style.display = "inline-block";
@@ -167,10 +187,10 @@
             document.getElementById('instruction').innerText = langData[currentLang].step2;
         }
 
-        // Bật/Tắt chế độ chống trộm tự động so sánh
+        // 2. Bật/Tắt chế độ chống trộm
         function toggleSystem() {
-            if (!ownerPixels) {
-                alert("Please capture owner photo first!");
+            if (!ownerLandmarks) {
+                alert("Please register owner pose first!");
                 return;
             }
 
@@ -180,42 +200,31 @@
                 btnArm.style.background = "#e74c3c";
                 statusDiv.innerText = langData[currentLang].armedDesc;
                 document.getElementById('instruction').innerText = langData[currentLang].armedDesc;
-
-                // Quét và so sánh mỗi 1 giây
-                watchInterval = setInterval(compareWithTaste, 1000);
             } else {
                 btnArm.innerText = langData[currentLang].btnArmOn;
                 btnArm.style.background = "#27ae60";
-                statusDiv.innerText = langData[currentLang].cameraReady;
+                statusDiv.innerText = langData[currentLang].ready;
                 document.getElementById('instruction').innerText = langData[currentLang].step2;
-                clearInterval(watchInterval);
             }
         }
 
-        // Thuật toán so sánh hình ảnh hiện tại với ảnh mẫu chủ nhân
-        function compareWithTaste() {
-            if (!isArmed || !ownerPixels) return;
-
-            hCtx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-            const currentImgData = hCtx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height);
-            const pixels = currentImgData.data;
-
-            let diffCount = 0;
-            const totalPixels = hiddenCanvas.width * hiddenCanvas.height;
-
-            for (let i = 0; i < pixels.length; i += 4) {
-                const rDiff = Math.abs(pixels[i] - ownerPixels[i]);
-                const gDiff = Math.abs(pixels[i+1] - ownerPixels[i+1]);
-                const bDiff = Math.abs(pixels[i+2] - ownerPixels[i+2]);
-
-                // Nếu điểm ảnh nào lệch màu quá nhiều so với ảnh chủ nhân
-                if ((rDiff + gDiff + bDiff) / 3 > 45) {
-                    diffCount++;
-                }
+        // 3. Thuật toán so sánh tỷ lệ khung xương (bất chấp quần áo hay đổi hướng nhẹ)
+        function checkStranger(detectedPose) {
+            let totalDiff = 0;
+            // So sánh các điểm khớp chính (vai, hông, khuỷu tay...)
+            const keyPoints = [11, 12, 23, 24, 13, 14, 15, 16]; 
+            
+            for (let idx of keyPoints) {
+                let p1 = ownerLandmarks[idx];
+                let p2 = detectedPose[idx];
+                let dist = Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+                totalDiff += dist;
             }
 
-            // Nếu mức độ khác biệt vượt quá 35% (nghĩa là không phải chủ nhân / có người lạ xuất hiện)
-            if (diffCount > totalPixels * 0.35) {
+            let avgDiff = totalDiff / keyPoints.length;
+
+            // Nếu độ lệch tỷ lệ khung xương vượt ngưỡng (nghĩa là vóc dáng khác hẳn chủ nhân / người lạ)
+            if (avgDiff > 0.25) {
                 let currentTime = Date.now();
                 if (currentTime - lastSentTime > 15000) { // Giãn cách 15 giây tránh spam
                     lastSentTime = currentTime;
@@ -224,16 +233,15 @@
             }
         }
 
+        // Chụp ảnh và gửi qua Discord Webhook
         function takePhotoAndSend() {
             statusDiv.innerText = langData[currentLang].strangerAlert;
-            const context = canvas.getContext('2d');
-            context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            canvas.toBlob(blob => {
+            
+            canvasElement.toBlob(blob => {
                 const formData = new FormData();
-                formData.append('file', blob, 'stranger_detected.jpg');
+                formData.append('file', blob, 'pose_stranger.jpg');
                 formData.append('payload_json', JSON.stringify({
-                    content: "🚨 **CẢNH BÁO CHỐNG TRỘM:** Phát hiện người lạ (không khớp với ảnh mẫu chủ nhân) tiếp cận lúc " + new Date().toLocaleTimeString() + "!"
+                    content: "🚨 **CẢNH BÁO CHỐNG TRỘM (Khung xương):** Phát hiện người lạ có vóc dáng khác chủ nhân tiếp cận lúc " + new Date().toLocaleTimeString() + "!"
                 }));
 
                 fetch(DISCORD_WEBHOOK_URL, {
@@ -246,11 +254,10 @@
                     }
                 })
                 .catch(error => {
-                    statusDiv.innerText = langData[currentLang].netError + error;
+                    statusDiv.innerText = "Error: " + error;
                 });
             }, 'image/jpeg');
         }
     </script>
-
 </body>
 </html>
