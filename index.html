@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hệ Thống Chống Trộm iPhone</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background: #121212; color: #fff; margin-top: 40px; padding: 10px; }
+        video, canvas { display: block; margin: 15px auto; border-radius: 10px; max-width: 100%; border: 2px solid #333; }
+        button { padding: 14px 28px; font-size: 16px; background: #e74c3c; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #c0392b; }
+        #status { margin-top: 15px; font-weight: bold; color: #f1c40f; font-size: 15px; }
+    </style>
+</head>
+<body>
+
+    <h2>🚨 Trạm Giám Sát Chống Trộm iPhone</h2>
+    <p>Đặt cố định iPhone, hướng camera về phía khu vực cần canh gác.</p>
+
+    <!-- Khung hiển thị camera trực tiếp -->
+    <video id="webcam" autoplay playsinline width="320" height="240"></video>
+    <canvas id="canvas" width="320" height="240" style="display:none;"></canvas>
+
+    <br>
+    <button onclick="chupVaGui()">Chụp & Gửi Cảnh Báo Ngay</button>
+    <div id="status">Đang khởi động camera...</div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const statusDiv = document.getElementById('status');
+
+        // 👉 DÁN ĐƯỜNG DẪN DISCORD WEBHOOK CỦA BẠN VÀO DƯỚI ĐÂY (GIỮ NGUYÊN DẤU NHÁY KÉP)
+        const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1558912856559460404/ARuaFNfuLUFYp3kS_XOf8NQrI85ZH0Nkw1FEHxvLrjxPbC2KDgfGAduANrgrV74Y4A57";
+
+        // Tự động bật camera trước của iPhone khi mở trang web
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+            .then(stream => {
+                video.srcObject = stream;
+                statusDiv.innerText = "Camera đã sẵn sàng hoạt động!";
+            })
+            .catch(err => {
+                statusDiv.innerText = "Lỗi: Không thể truy cập camera (" + err + "). Hãy kiểm tra quyền Safari.";
+            });
+
+        function chupVaGui() {
+            statusDiv.innerText = "Đang chụp ảnh...";
+            const context = canvas.getContext('2d');
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Chuyển khung hình canvas thành tệp ảnh JPEG
+            canvas.toBlob(blob => {
+                const formData = new FormData();
+                formData.append('file', blob, 'ke_la_mat.jpg');
+                formData.append('payload_json', JSON.stringify({
+                    content: "🚨 **CẢNH BÁO CHỐNG TRỘM:** Hệ thống camera iPhone vừa ghi nhận hình ảnh kẻ lạ tiếp cận!"
+                }));
+
+                statusDiv.innerText = "Đang đẩy ảnh về Discord...";
+                fetch(DISCORD_WEBHOOK_URL, {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    if (response.ok) {
+                        statusDiv.innerText = "✅ Đã gửi ảnh cảnh báo về Discord thành công!";
+                    } else {
+                        statusDiv.innerText = "❌ Gửi thất bại! Kiểm tra lại Link Webhook.";
+                    }
+                })
+                .catch(error => {
+                    statusDiv.innerText = "❌ Lỗi mạng: " + error;
+                });
+            }, 'image/jpeg');
+        }
+    </script>
+
+</body>
+</html>
