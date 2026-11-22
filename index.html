@@ -65,6 +65,7 @@ video,canvas{width:100%;height:auto;display:block}
 <script src="https://cdn.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js"></script>
 <script>
 const MQTT_URL = "wss://broker.hivemq.com:8884/mqtt";
+const MATCH_RATIO = 0.35; // tăng lên 0.5 nếu muốn dễ nhận ra chủ nhân hơn
 
 const video = document.getElementById('webcam');
 const canvas = document.getElementById('canvas');
@@ -84,9 +85,9 @@ document.getElementById('roomKey').value = roomKey;
 document.getElementById('webhook').value = webhook;
 
 const L = {
-  zh: { heading:"🛡️ 智能防盜監控中心", step1:"步驟 1：請拍攝多張不同角度的主人照片。", step2:"步驟 2：已有樣本，可啟動警戒。", armedDesc:"🚨 警戒中！偵測到陌生人或 ESP32 震動將拍照發送至 Discord。", btnCapture:"📸 拍攝並新增主人照片", btnArmOn:"🚨 啟動警戒模式", btnArmOff:"🛑 關閉警戒模式", samples:"已保存的主人樣本", ready:"相機就緒，請先拍攝至少 1 張主人照片！", captured:"✅ 已新增主人照片！", needSample:"請先拍攝至少 1 張主人照片！", needHook:"請先填入 Discord Webhook！", stranger:"🚨 發現陌生人！正在發送...", motion:"🚨 ESP32 偵測到震動！正在發送...", sent:"🚨 照片已發送至 Discord！", netErr:"❌ 網絡錯誤: ", online:"ESP32：在線", offline:"ESP32：離線 / 未連線", on:"（警戒中）", off:"（已解除）", key:"房間代碼（需與 ESP32 相同）", hook:"Discord Webhook", save:"儲存並連線", flip:"🔄 切換前後鏡頭" },
-  vi: { heading:"🛡️ Trạm Chống Trộm Thông Minh", step1:"Bước 1: Chụp nhiều ảnh chủ nhân ở các góc độ/trang phục khác nhau.", step2:"Bước 2: Đã có ảnh mẫu, có thể bật chế độ chống trộm.", armedDesc:"🚨 ĐANG CANH GÁC! Người lạ hoặc rung lắc từ ESP32 sẽ chụp ảnh gửi Discord.", btnCapture:"📸 Chụp & Thêm Ảnh Chủ Nhân", btnArmOn:"🚨 Bật Chế Độ Chống Trộm", btnArmOff:"🛑 Tắt Chế Độ Chống Trộm", samples:"Ảnh mẫu chủ nhân đã lưu", ready:"Camera sẵn sàng, hãy chụp ít nhất 1 ảnh mẫu chủ nhân!", captured:"✅ Đã thêm 1 ảnh mẫu!", needSample:"Hãy chụp ít nhất 1 ảnh mẫu trước!", needHook:"Hãy nhập Discord Webhook trước!", stranger:"🚨 PHÁT HIỆN NGƯỜI LẠ! Đang gửi cảnh báo...", motion:"🚨 ESP32 PHÁT HIỆN RUNG LẮC! Đang gửi ảnh...", sent:"🚨 Đã gửi ảnh về Discord!", netErr:"❌ Lỗi mạng: ", online:"ESP32: Đang online", offline:"ESP32: Offline / chưa kết nối", on:"(ĐANG BẬT)", off:"(ĐÃ TẮT)", key:"Mã phòng (phải giống trong code ESP32)", hook:"Discord Webhook", save:"Lưu & kết nối", flip:"🔄 Đổi camera trước/sau" },
-  en: { heading:"🛡️ Smart Anti-Theft Center", step1:"Step 1: Take several photos of the owner at different angles/outfits.", step2:"Step 2: Samples ready, you can arm the system.", armedDesc:"🚨 ARMED! Strangers or ESP32 motion will send a photo to Discord.", btnCapture:"📸 Capture & Add Owner Photo", btnArmOn:"🚨 Arm System", btnArmOff:"🛑 Disarm System", samples:"Saved owner samples", ready:"Camera ready, capture at least 1 owner photo!", captured:"✅ Owner photo added!", needSample:"Capture at least 1 owner photo first!", needHook:"Enter the Discord Webhook first!", stranger:"🚨 STRANGER DETECTED! Sending...", motion:"🚨 ESP32 MOTION! Sending photo...", sent:"🚨 Snapshot sent to Discord!", netErr:"❌ Network error: ", online:"ESP32: Online", offline:"ESP32: Offline / not connected", on:"(ARMED)", off:"(DISARMED)", key:"Room key (must match ESP32 code)", hook:"Discord Webhook", save:"Save & connect", flip:"🔄 Flip camera" }
+  zh: { heading:"🛡️ 智能防盜監控中心", step1:"步驟 1：請拍攝多張不同角度的主人照片。", step2:"步驟 2：已有樣本，可啟動警戒。", armedDesc:"🚨 警戒中！偵測到陌生人或 ESP32 震動將拍照發送至 Discord。", btnCapture:"📸 拍攝並新增主人照片", btnArmOn:"🚨 啟動警戒模式", btnArmOff:"🛑 關閉警戒模式", samples:"已保存的主人樣本", ready:"相機就緒，請先拍攝至少 1 張主人照片！", captured:"✅ 已新增主人照片！", needSample:"請先拍攝至少 1 張主人照片！", needHook:"請先填入 Discord Webhook！", stranger:"🚨 發現陌生人！正在發送...", motion:"🚨 ESP32 偵測到震動！正在發送...", ownerMoving:"✅ 主人正在移動物品，已忽略", sent:"🚨 照片已發送至 Discord！", netErr:"❌ 網絡錯誤: ", online:"ESP32：在線", offline:"ESP32：離線 / 未連線", on:"（警戒中）", off:"（已解除）", key:"房間代碼（需與 ESP32 相同）", hook:"Discord Webhook", save:"儲存並連線", flip:"🔄 切換前後鏡頭" },
+  vi: { heading:"🛡️ Trạm Chống Trộm Thông Minh", step1:"Bước 1: Chụp nhiều ảnh chủ nhân ở các góc độ/trang phục khác nhau.", step2:"Bước 2: Đã có ảnh mẫu, có thể bật chế độ chống trộm.", armedDesc:"🚨 ĐANG CANH GÁC! Người lạ hoặc rung lắc từ ESP32 sẽ chụp ảnh gửi Discord.", btnCapture:"📸 Chụp & Thêm Ảnh Chủ Nhân", btnArmOn:"🚨 Bật Chế Độ Chống Trộm", btnArmOff:"🛑 Tắt Chế Độ Chống Trộm", samples:"Ảnh mẫu chủ nhân đã lưu", ready:"Camera sẵn sàng, hãy chụp ít nhất 1 ảnh mẫu chủ nhân!", captured:"✅ Đã thêm 1 ảnh mẫu!", needSample:"Hãy chụp ít nhất 1 ảnh mẫu trước!", needHook:"Hãy nhập Discord Webhook trước!", stranger:"🚨 PHÁT HIỆN NGƯỜI LẠ! Đang gửi cảnh báo...", motion:"🚨 ESP32 PHÁT HIỆN RUNG LẮC! Đang gửi ảnh...", ownerMoving:"✅ Chủ nhân đang di chuyển đồ, bỏ qua", sent:"🚨 Đã gửi ảnh về Discord!", netErr:"❌ Lỗi mạng: ", online:"ESP32: Đang online", offline:"ESP32: Offline / chưa kết nối", on:"(ĐANG BẬT)", off:"(ĐÃ TẮT)", key:"Mã phòng (phải giống trong code ESP32)", hook:"Discord Webhook", save:"Lưu & kết nối", flip:"🔄 Đổi camera trước/sau" },
+  en: { heading:"🛡️ Smart Anti-Theft Center", step1:"Step 1: Take several photos of the owner at different angles/outfits.", step2:"Step 2: Samples ready, you can arm the system.", armedDesc:"🚨 ARMED! Strangers or ESP32 motion will send a photo to Discord.", btnCapture:"📸 Capture & Add Owner Photo", btnArmOn:"🚨 Arm System", btnArmOff:"🛑 Disarm System", samples:"Saved owner samples", ready:"Camera ready, capture at least 1 owner photo!", captured:"✅ Owner photo added!", needSample:"Capture at least 1 owner photo first!", needHook:"Enter the Discord Webhook first!", stranger:"🚨 STRANGER DETECTED! Sending...", motion:"🚨 ESP32 MOTION! Sending photo...", ownerMoving:"✅ Owner is moving items, ignored", sent:"🚨 Snapshot sent to Discord!", netErr:"❌ Network error: ", online:"ESP32: Online", offline:"ESP32: Offline / not connected", on:"(ARMED)", off:"(DISARMED)", key:"Room key (must match ESP32 code)", hook:"Discord Webhook", save:"Save & connect", flip:"🔄 Flip camera" }
 };
 
 function refresh() {
@@ -139,6 +140,23 @@ function captureOwnerSample() {
   statusDiv.innerText = L[currentLang].captured;
 }
 
+// Trả về true nếu khung hình hiện tại khớp với một trong các ảnh mẫu chủ nhân
+function isOwnerPresent() {
+  if (ownerSamples.length === 0) return false;
+  hCtx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+  const cur = hCtx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height).data;
+  const total = hiddenCanvas.width * hiddenCanvas.height;
+  for (const s of ownerSamples) {
+    let diff = 0;
+    for (let i = 0; i < cur.length; i += 4) {
+      const d = (Math.abs(cur[i]-s[i]) + Math.abs(cur[i+1]-s[i+1]) + Math.abs(cur[i+2]-s[i+2])) / 3;
+      if (d > 45) diff++;
+    }
+    if (diff <= total * MATCH_RATIO) return true;
+  }
+  return false;
+}
+
 // ---------- Arm / disarm ----------
 function setArmedState(s) {
   if (s && ownerSamples.length === 0) return;
@@ -163,20 +181,8 @@ function toggleSystem() {
 }
 
 function compareWithSamples() {
-  if (!isArmed || ownerSamples.length === 0) return;
-  hCtx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-  const cur = hCtx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height).data;
-  const total = hiddenCanvas.width * hiddenCanvas.height;
-  let matched = false;
-  for (const s of ownerSamples) {
-    let diff = 0;
-    for (let i = 0; i < cur.length; i += 4) {
-      const d = (Math.abs(cur[i]-s[i]) + Math.abs(cur[i+1]-s[i+1]) + Math.abs(cur[i+2]-s[i+2])) / 3;
-      if (d > 45) diff++;
-    }
-    if (diff <= total * 0.35) { matched = true; break; }
-  }
-  if (!matched && Date.now() - lastSentTime > 15000) {
+  if (!isArmed) return;
+  if (!isOwnerPresent() && Date.now() - lastSentTime > 15000) {
     lastSentTime = Date.now();
     statusDiv.innerText = L[currentLang].stranger;
     takePhotoAndSend("🚨 **CẢNH BÁO CHỐNG TRỘM:** Phát hiện người lạ không khớp ảnh mẫu lúc ");
@@ -216,10 +222,12 @@ function connectMqtt() {
       try { espArmed = !!JSON.parse(m).armed; } catch (e) {}
       setArmedState(espArmed); refresh();
     } else if (topic === T.event && m === 'motion') {
-      if (espArmed && Date.now() - lastSentTime > 8000) {
+      if (!espArmed) return;
+      if (isOwnerPresent()) { statusDiv.innerText = L[currentLang].ownerMoving; return; }
+      if (Date.now() - lastSentTime > 8000) {
         lastSentTime = Date.now();
         statusDiv.innerText = L[currentLang].motion;
-        takePhotoAndSend("🚨 **CẢNH BÁO RUNG LẮC (ESP32-S3 MPU6050):** Phát hiện chuyển động/va chạm lúc ");
+        takePhotoAndSend("🚨 **CẢNH BÁO RUNG LẮC (ESP32-S3 MPU6050):** Có người lạ di chuyển đồ vật lúc ");
       }
     }
   });
