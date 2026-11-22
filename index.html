@@ -1,215 +1,488 @@
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <WebServer.h>
-#include <Wire.h>
-#include <SPI.h>
-#include <MFRC522.h>
-#include <Adafruit_MPU6050.h>
-#include <Adafruit_Sensor.h>
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="page-title">智能防盜監控中心 - ESP32-S3 聯動</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --accent-color: #3b82f6;
+            --success-color: #10b981;
+            --danger-color: #ef4444;
+            --text-color: #f8fafc;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            text-align: center;
+            background: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 480px;
+            margin: 0 auto;
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+        }
+        h2 { margin-bottom: 5px; font-size: 22px; }
+        p { color: #94a3b8; font-size: 14px; margin-bottom: 16px; }
 
-// --- 1. THÔNG TIN WI-FI ---
-const char* ssid = "Shen";
-const char* password = "123456789";
+        .esp-box {
+            background: #0f172a;
+            padding: 12px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            text-align: left;
+            font-size: 13px;
+        }
+        .esp-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 6px;
+        }
+        .esp-box input {
+            flex: 1;
+            padding: 8px 10px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            background: #1e293b;
+            color: #fff;
+            font-size: 13px;
+        }
+        .btn-small {
+            padding: 8px 12px;
+            font-size: 13px;
+            border-radius: 8px;
+            background: #475569;
+            color: #fff;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .esp-state {
+            margin-top: 8px;
+            color: #94a3b8;
+            font-size: 12px;
+        }
 
-// --- 2. DISCORD WEBHOOK URL ---
-const char* discordWebhookUrl = "https://discord.com/api/webhooks/1558912856559460404/ARuaFNfuLUFYp3kS_XOf8NQrI85ZH0Nkw1FEHxvLrjxPbC2KDgfGAduANrgrV74Y4A57";
+        .video-container {
+            position: relative;
+            display: inline-block;
+            width: 100%;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #000;
+            border: 2px solid #334155;
+        }
+        video, canvas {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
 
-// --- 3. CẤU HÌNH RFID RC522 (ESP32-S3 N16R8) ---
-#define RST_PIN 8
-#define SS_PIN  15
-MFRC522 mfrc522(SS_PIN, RST_PIN);
+        .controls {
+            margin-top: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        button.main-btn {
+            padding: 14px;
+            font-size: 16px;
+            font-weight: bold;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        button:active { transform: scale(0.98); }
+        .btn-primary { background: var(--accent-color); }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-success { background: var(--success-color); }
+        .btn-success:hover { background: #059669; }
+        .btn-danger { background: var(--danger-color); }
+        .btn-danger:hover { background: #dc2626; }
 
-// --- 4. CẤU HÌNH HC-SR04 & LED RGB ---
-const int trigPin = 7;
-const int echoPin = 4;
+        .lang-group {
+            margin-bottom: 15px;
+            display: flex;
+            justify-content: center;
+            gap: 5px;
+        }
+        .lang-btn {
+            background: #334155;
+            font-size: 12px;
+            padding: 6px 10px;
+            border-radius: 6px;
+            color: #fff;
+            border: none;
+            cursor: pointer;
+        }
 
-const int redPin = 41;
-const int greenPin = 40;
-const int bluePin = 42;
+        .samples-section {
+            margin-top: 15px;
+            text-align: left;
+            background: #0f172a;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        .samples-title { font-size: 13px; color: #94a3b8; margin-bottom: 5px; }
+        .thumbnails {
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            padding-bottom: 5px;
+        }
+        .thumbnail {
+            width: 50px;
+            height: 50px;
+            border-radius: 6px;
+            object-fit: cover;
+            border: 2px solid var(--success-color);
+            flex-shrink: 0;
+        }
 
-WebServer server(80);
+        #status {
+            margin-top: 15px;
+            font-weight: bold;
+            color: #fbbf24;
+            font-size: 14px;
+            padding: 10px;
+            background: #0f172a;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
 
-bool systemArmed = true;          // true = BẬT chống trộm, false = TẮT
-bool objectDetectedState = false; // Chống spam thông báo HC-SR04
-bool motionTriggered = false;     // Cờ báo vừa có rung lắc MPU6050 cho web biết
+    <div class="container">
+        <!-- Đa ngôn ngữ -->
+        <div class="lang-group">
+            <button class="lang-btn" onclick="switchLanguage('zh')">🇹🇼 繁體</button>
+            <button class="lang-btn" onclick="switchLanguage('vi')">🇻🇳 Tiếng Việt</button>
+            <button class="lang-btn" onclick="switchLanguage('en')">🇬🇧 English</button>
+        </div>
 
-Adafruit_MPU6050 mpu;
+        <h2 id="main-heading">🛡️ 智能防盜監控中心</h2>
+        <p id="instruction">步驟 1：請面向鏡頭拍攝多張不同角度或服飾的主人照片以提高識別度。</p>
 
-const float THRESHOLD = 1.5;
-float baselineX, baselineY, baselineZ;
+        <!-- Kết nối trạng thái ESP32-S3 -->
+        <div class="esp-box">
+            <label for="espIpInput" id="esp-label"><strong>ESP32-S3 IP (Wi-Fi Shen):</strong></label>
+            <div class="esp-row">
+                <input type="text" id="espIpInput" placeholder="Ví dụ: 192.168.1.50">
+                <button class="btn-small" id="btnSync" onclick="saveAndPollEsp()">同步</button>
+            </div>
+            <div class="esp-state" id="espSyncState">ESP32 同步：未設定 IP（可手動切換警戒狀態）</div>
+        </div>
 
-void setColor(int redValue, int greenValue, int blueValue) {
-  analogWrite(redPin, constrain(redValue, 0, 255));
-  analogWrite(greenPin, constrain(greenValue, 0, 255));
-  analogWrite(bluePin, constrain(blueValue, 0, 255));
-}
+        <div class="video-container">
+            <video id="webcam" autoplay playsinline muted></video>
+        </div>
+        <canvas id="canvas" style="display:none;"></canvas>
+        <canvas id="hiddenCanvas" width="160" height="120" style="display:none;"></canvas>
 
-void updateStatusLed() {
-  if (!systemArmed) {
-    setColor(0, 0, 180); // Xanh dương: Đang TẮT chế độ chống trộm (chủ nhân rảnh tay)
-  } else if (objectDetectedState) {
-    setColor(255, 140, 0); // Cam: Có người/vật lại gần vùng siêu âm
-  } else {
-    setColor(0, 255, 0); // Xanh lá: Đang BẬT canh gác bình thường
-  }
-}
+        <!-- Danh sách ảnh mẫu đã lưu -->
+        <div class="samples-section">
+            <div class="samples-title" id="samples-label">已保存的主人樣本圖片 (0 張):</div>
+            <div class="thumbnails" id="thumbnailContainer"></div>
+        </div>
 
-void sendDiscordAlert(String message) {
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    http.begin(discordWebhookUrl);
-    http.addHeader("Content-Type", "application/json");
+        <div class="controls">
+            <button id="btnCapture" class="main-btn btn-primary" onclick="captureOwnerSample()">📸 拍攝並新增主人照片</button>
+            <button id="btnArm" class="main-btn btn-success" onclick="toggleSystem()" style="display:none;">🚨 啟動防盜警戒模式</button>
+        </div>
 
-    String jsonPayload = "{\"content\": \"" + message + "\"}";
-    int httpResponseCode = http.POST(jsonPayload);
+        <div id="status">相機就緒，請先拍攝至少 1 張主人照片！</div>
+    </div>
 
-    if (httpResponseCode > 0) {
-      Serial.print("Đã gửi thông báo Discord, mã phản hồi: ");
-      Serial.println(httpResponseCode);
-    } else {
-      Serial.print("Lỗi khi gửi, mã lỗi: ");
-      Serial.println(httpResponseCode);
-    }
-    http.end();
-  } else {
-    Serial.println("Mất kết nối Wi-Fi!");
-  }
-}
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const hiddenCanvas = document.getElementById('hiddenCanvas');
+        const hCtx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
+        const statusDiv = document.getElementById('status');
+        const btnCapture = document.getElementById('btnCapture');
+        const btnArm = document.getElementById('btnArm');
+        const thumbnailContainer = document.getElementById('thumbnailContainer');
+        const espIpInput = document.getElementById('espIpInput');
+        const espSyncState = document.getElementById('espSyncState');
 
-// Endpoint để thiết bị trong mạng LAN kiểm tra trạng thái ESP32-S3
-void handleStatus() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  String json = "{\"armed\":" + String(systemArmed ? "true" : "false") +
-                ",\"near\":" + String(objectDetectedState ? "true" : "false") +
-                ",\"motion\":" + String(motionTriggered ? "true" : "false") + "}";
-  server.send(200, "application/json", json);
-  motionTriggered = false; // Reset cờ sau khi đã đọc
-}
+        const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1558912856559460404/ARuaFNfuLUFYp3kS_XOf8NQrI85ZH0Nkw1FEHxvLrjxPbC2KDgfGAduANrgrV74Y4A57";
 
-void setup() {
-  Serial.begin(115200);
+        let ownerSamples = [];
+        let isArmed = false;
+        let lastSentTime = 0;
+        let watchInterval = null;
+        let espPollInterval = null;
+        let espIp = localStorage.getItem('esp32_ip') || "";
+        let currentLang = 'zh';
 
-  pinMode(trigPin, OUTPUT);
-  pinMode(echoPin, INPUT);
-  pinMode(redPin, OUTPUT);
-  pinMode(greenPin, OUTPUT);
-  pinMode(bluePin, OUTPUT);
-  updateStatusLed();
+        if (espIp) {
+            espIpInput.value = espIp;
+        }
 
-  SPI.begin(16, 18, 17, 15);
-  mfrc522.PCD_Init();
+        const langData = {
+            zh: {
+                title: "智能防盜監控中心 - ESP32-S3 聯動",
+                heading: "🛡️ 智能防盜監控中心",
+                step1: "步驟 1：請面向鏡頭拍攝多張不同角度或服飾的主人照片以提高識別度。",
+                step2: "步驟 2：已收集足夠樣本，隨時可以啟動防盜警戒模式。",
+                armedDesc: "🚨 防盜警戒中！檢測到陌生人或 ESP32 震動將自動拍照發送至 Discord。",
+                btnCapture: "📸 拍攝並新增主人照片",
+                btnArmOn: "🚨 啟動防盜警戒模式",
+                btnArmOff: "🛑 關閉防盜警戒模式",
+                samplesLabel: "已保存的主人樣本圖片",
+                ready: "相機就緒，請先拍攝至少 1 張主人照片！",
+                captured: "✅ 成功新增 1 張主人照片！您可以繼續切換角度拍攝多張。",
+                needSample: "請先拍攝至少 1 張主人照片才能啟動！",
+                strangerAlert: "🚨 發現陌生人！正在拍照並發送警告...",
+                motionAlert: "🚨 ESP32 偵測到震動！正在拍照並發送至 Discord...",
+                sentSuccess: "🚨 照片已成功發送至 Discord！",
+                netError: "❌ 網絡錯誤: ",
+                syncBtn: "同步",
+                espDisconnected: "ESP32 同步：無法連線（可能受 HTTPS 混合內容限制或未在同一 Wi-Fi）",
+                espArmed: "ESP32 同步：已連線（RFID 狀態：已開啟警戒）",
+                espDisarmed: "ESP32 同步：已連線（RFID 狀態：已解除警戒）"
+            },
+            vi: {
+                title: "Trung Tâm Chống Trộm - Kết Hợp ESP32-S3",
+                heading: "🛡️ Trạm Chống Trộm Thông Minh",
+                step1: "Bước 1: Chụp nhiều bức ảnh ở các góc độ hoặc trang phục khác nhau để làm mẫu chủ nhân.",
+                step2: "Bước 2: Đã có ảnh mẫu, bạn có thể bật chế độ chống trộm.",
+                armedDesc: "🚨 ĐANG CẠNH GÁC! Phát hiện người lạ hoặc rung lắc từ ESP32 sẽ chụp ảnh gửi Discord.",
+                btnCapture: "📸 Chụp & Thêm Ảnh Chủ Nhân",
+                btnArmOn: "🚨 Bật Chế Độ Chống Trộm",
+                btnArmOff: "🛑 Tắt Chế Độ Chống Trộm",
+                samplesLabel: "Danh sách ảnh mẫu chủ nhân đã lưu",
+                ready: "Camera đã sẵn sàng, hãy chụp ít nhất 1 ảnh mẫu chủ nhân!",
+                captured: "✅ Đã thêm 1 ảnh mẫu thành công! Bạn có thể chụp thêm góc độ khác.",
+                needSample: "Vui lòng chụp ít nhất 1 ảnh mẫu chủ nhân trước khi bật!",
+                strangerAlert: "🚨 PHÁT HIỆN NGƯỜI LẠ! Đang chụp ảnh và gửi cảnh báo...",
+                motionAlert: "🚨 ESP32 PHÁT HIỆN RUNG LẮC! Đang chụp ảnh gửi Discord...",
+                sentSuccess: "🚨 Đã gửi ảnh về Discord thành công!",
+                netError: "❌ Lỗi mạng: ",
+                syncBtn: "Đồng bộ",
+                espDisconnected: "ESP32: Chưa kết nối được (kiểm tra IP cùng Wi-Fi Shen hoặc mở trực tiếp file nếu bị chặn HTTPS)",
+                espArmed: "ESP32: Đã kết nối (RFID: ĐANG BẬT CHỐNG TRỘM)",
+                espDisarmed: "ESP32: Đã kết nối (RFID: ĐÃ TẮT CHỐNG TRỘM)"
+            },
+            en: {
+                title: "Smart Anti-Theft - ESP32-S3 Sync",
+                heading: "🛡️ Smart Anti-Theft Center",
+                step1: "Step 1: Take multiple photos of yourself at different angles or outfits.",
+                step2: "Step 2: Samples collected, ready to arm the security system.",
+                armedDesc: "🚨 ARMED! Strangers or ESP32 motion will trigger a Discord photo alert.",
+                btnCapture: "📸 Capture & Add Owner Photo",
+                btnArmOn: "🚨 Arm Security System",
+                btnArmOff: "🛑 Disarm System",
+                samplesLabel: "Saved Owner Sample Photos",
+                ready: "Camera ready, please capture at least 1 owner sample!",
+                captured: "✅ Owner photo added! You can capture more from different angles.",
+                needSample: "Please capture at least 1 owner photo first!",
+                strangerAlert: "🚨 STRANGER DETECTED! Taking photo and sending alert...",
+                motionAlert: "🚨 ESP32 MOTION DETECTED! Capturing photo for Discord...",
+                sentSuccess: "🚨 Snapshot sent to Discord!",
+                netError: "❌ Network error: ",
+                syncBtn: "Sync",
+                espDisconnected: "ESP32: Unreachable (check same Wi-Fi or HTTPS mixed-content block)",
+                espArmed: "ESP32: Connected (RFID Status: ARMED)",
+                espDisarmed: "ESP32: Connected (RFID Status: DISARMED)"
+            }
+        };
 
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  Serial.print("Đang kết nối Wi-Fi...");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nĐã kết nối Wi-Fi thành công!");
-  Serial.print("IP của ESP32-S3: ");
-  Serial.println(WiFi.localIP());
+        function switchLanguage(lang) {
+            currentLang = lang;
+            document.getElementById('page-title').innerText = langData[lang].title;
+            document.getElementById('main-heading').innerText = langData[lang].heading;
+            document.getElementById('btnSync').innerText = langData[lang].syncBtn;
+            document.getElementById('samples-label').innerText = langData[lang].samplesLabel + ` (${ownerSamples.length}):`;
+            btnCapture.innerText = langData[lang].btnCapture;
+            if (isArmed) {
+                btnArm.innerText = langData[lang].btnArmOff;
+                statusDiv.innerText = langData[lang].armedDesc;
+            } else if (ownerSamples.length > 0) {
+                document.getElementById('instruction').innerText = langData[lang].step2;
+                btnArm.innerText = langData[lang].btnArmOn;
+            } else {
+                document.getElementById('instruction').innerText = langData[lang].step1;
+            }
+        }
 
-  server.on("/status", handleStatus);
-  server.begin();
+        async function startVideo() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+                video.srcObject = stream;
+            } catch (err) {
+                statusDiv.innerText = "Camera Error: " + err;
+            }
+        }
+        startVideo();
 
-  Wire.begin(5, 6);
-  if (!mpu.begin()) {
-    Serial.println("Không tìm thấy cảm biến MPU6050!");
-    while (1) { delay(10); }
-  }
+        function captureOwnerSample() {
+            hCtx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+            const imgData = hCtx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height);
+            ownerSamples.push(imgData.data);
 
-  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = hiddenCanvas.width;
+            tempCanvas.height = hiddenCanvas.height;
+            tempCanvas.getContext('2d').putImageData(imgData, 0, 0);
 
-  sensors_event_t a, g, temp;
-  mpu.getEvent(&a, &g, &temp);
-  baselineX = a.acceleration.x;
-  baselineY = a.acceleration.y;
-  baselineZ = a.acceleration.z;
+            const imgThumb = document.createElement('img');
+            imgThumb.src = tempCanvas.toDataURL();
+            imgThumb.className = 'thumbnail';
+            thumbnailContainer.appendChild(imgThumb);
 
-  sendDiscordAlert("🟢 Hệ thống giám sát đồ vật trên bàn đã BẬT (Trạng thái: Đã bảo vệ)!");
-}
+            document.getElementById('samples-label').innerText = langData[currentLang].samplesLabel + ` (${ownerSamples.length}):`;
+            statusDiv.innerText = langData[currentLang].captured;
+            btnArm.style.display = "block";
+            if (!isArmed) {
+                document.getElementById('instruction').innerText = langData[currentLang].step2;
+                btnArm.innerText = langData[currentLang].btnArmOn;
+            }
+        }
 
-void loop() {
-  server.handleClient();
+        function setArmedState(newState) {
+            if (newState && ownerSamples.length === 0) {
+                return;
+            }
+            if (isArmed === newState) return;
 
-  // 1. Quẹt thẻ RFID để Bật / Tắt hệ thống
-  if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
-    Serial.print("Đã phát hiện thẻ! UID: ");
-    for (byte i = 0; i < mfrc522.uid.size; i++) {
-      Serial.print(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " ");
-      Serial.print(mfrc522.uid.uidByte[i], HEX);
-    }
-    Serial.println();
+            isArmed = newState;
+            if (isArmed) {
+                btnArm.innerText = langData[currentLang].btnArmOff;
+                btnArm.className = "main-btn btn-danger";
+                statusDiv.innerText = langData[currentLang].armedDesc;
+                document.getElementById('instruction').innerText = langData[currentLang].armedDesc;
+                clearInterval(watchInterval);
+                watchInterval = setInterval(compareWithAllSamples, 1000);
+            } else {
+                btnArm.innerText = langData[currentLang].btnArmOn;
+                btnArm.className = "main-btn btn-success";
+                statusDiv.innerText = langData[currentLang].ready;
+                document.getElementById('instruction').innerText = langData[currentLang].step2;
+                clearInterval(watchInterval);
+            }
+        }
 
-    systemArmed = !systemArmed;
-    updateStatusLed();
+        function toggleSystem() {
+            if (ownerSamples.length === 0) {
+                alert(langData[currentLang].needSample);
+                return;
+            }
+            setArmedState(!isArmed);
+        }
 
-    if (systemArmed) {
-      Serial.println("🔒 Đã BẬT hệ thống chống trộm!");
-      sendDiscordAlert("🔒 Hệ thống chống trộm đã được **BẬT** bằng thẻ từ.");
+        function compareWithAllSamples() {
+            if (!isArmed || ownerSamples.length === 0) return;
 
-      sensors_event_t a, g, temp;
-      mpu.getEvent(&a, &g, &temp);
-      baselineX = a.acceleration.x;
-      baselineY = a.acceleration.y;
-      baselineZ = a.acceleration.z;
-    } else {
-      Serial.println("🔓 Đã TẮT hệ thống chống trộm.");
-      sendDiscordAlert("🔓 Hệ thống chống trộm đã được **TẮT** tạm thời.");
-    }
+            hCtx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+            const currentImgData = hCtx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height);
+            const currentPixels = currentImgData.data;
+            const totalPixels = hiddenCanvas.width * hiddenCanvas.height;
 
-    mfrc522.PICC_HaltA();
-    mfrc522.PCD_StopCrypto1();
-    delay(1000);
-  }
+            let matchedAny = false;
 
-  // 2. Kiểm tra cảm biến siêu âm HC-SR04
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(trigPin, LOW);
+            for (let sample of ownerSamples) {
+                let diffCount = 0;
+                for (let i = 0; i < currentPixels.length; i += 4) {
+                    const rDiff = Math.abs(currentPixels[i] - sample[i]);
+                    const gDiff = Math.abs(currentPixels[i+1] - sample[i+1]);
+                    const bDiff = Math.abs(currentPixels[i+2] - sample[i+2]);
+                    if ((rDiff + gDiff + bDiff) / 3 > 45) {
+                        diffCount++;
+                    }
+                }
+                if (diffCount <= totalPixels * 0.35) {
+                    matchedAny = true;
+                    break;
+                }
+            }
 
-  long duration = pulseIn(echoPin, HIGH, 30000);
-  int distance = duration * 0.034 / 2;
+            if (!matchedAny) {
+                let currentTime = Date.now();
+                if (currentTime - lastSentTime > 15000) {
+                    lastSentTime = currentTime;
+                    takePhotoAndSend("🚨 **CẢNH BÁO CHỐNG TRỘM:** Phát hiện người lạ không khớp với ảnh mẫu lúc ");
+                }
+            }
+        }
 
-  if (systemArmed && distance > 0 && distance < 20) {
-    if (!objectDetectedState) {
-      objectDetectedState = true;
-      updateStatusLed();
-      Serial.println("⚠️ Phát hiện có người lại gần cảm biến!");
-      sendDiscordAlert("👀 **THÔNG BÁO:** Phát hiện có người đang đứng lại gần khu vực giám sát (Cảm biến siêu âm)!");
-    }
-  } else {
-    if (objectDetectedState) {
-      objectDetectedState = false;
-      updateStatusLed();
-    }
-  }
+        function takePhotoAndSend(prefixText) {
+            statusDiv.innerText = langData[currentLang].strangerAlert;
+            canvas.width = 320;
+            canvas.height = 240;
+            const context = canvas.getContext('2d');
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-  // 3. Theo dõi gia tốc MPU6050 khi đang bật chống trộm
-  if (systemArmed) {
-    sensors_event_t a, g, temp;
-    mpu.getEvent(&a, &g, &temp);
+            canvas.toBlob(blob => {
+                const formData = new FormData();
+                formData.append('file', blob, 'security_snapshot.jpg');
+                formData.append('payload_json', JSON.stringify({
+                    content: prefixText + new Date().toLocaleTimeString() + "!"
+                }));
 
-    float deltaX = abs(a.acceleration.x - baselineX);
-    float deltaY = abs(a.acceleration.y - baselineY);
-    float deltaZ = abs(a.acceleration.z - baselineZ);
+                fetch(DISCORD_WEBHOOK_URL, {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    if (response.ok) {
+                        statusDiv.innerText = langData[currentLang].sentSuccess;
+                    }
+                })
+                .catch(error => {
+                    statusDiv.innerText = langData[currentLang].netError + error;
+                });
+            }, 'image/jpeg');
+        }
 
-    if (deltaX > THRESHOLD || deltaY > THRESHOLD || deltaZ > THRESHOLD) {
-      motionTriggered = true;
-      Serial.println("Phát hiện chuyển động! Đang gửi cảnh báo lên Discord...");
-      sendDiscordAlert("🚨 **CẢNH BÁO:** Có người vừa di chuyển đồ vật trên bàn làm việc của bạn!");
+        function saveAndPollEsp() {
+            const rawIp = espIpInput.value.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+            espIp = rawIp;
+            localStorage.setItem('esp32_ip', espIp);
+            clearInterval(espPollInterval);
+            if (!espIp) {
+                espSyncState.innerText = "ESP32: Đã xóa IP";
+                return;
+            }
+            pollEspStatus();
+            espPollInterval = setInterval(pollEspStatus, 2000);
+        }
 
-      baselineX = a.acceleration.x;
-      baselineY = a.acceleration.y;
-      baselineZ = a.acceleration.z;
+        async function pollEspStatus() {
+            if (!espIp) return;
+            try {
+                const res = await fetch(`http://${espIp}/status`, { cache: "no-store" });
+                if (!res.ok) throw new Error("HTTP " + res.status);
+                const data = await res.json();
 
-      delay(5000);
-    }
-  }
+                espSyncState.innerText = data.armed ? langData[currentLang].espArmed : langData[currentLang].espDisarmed;
+                setArmedState(Boolean(data.armed));
 
-  delay(100);
-}
+                if (data.armed && data.motion) {
+                    let now = Date.now();
+                    if (now - lastSentTime > 8000) {
+                        lastSentTime = now;
+                        statusDiv.innerText = langData[currentLang].motionAlert;
+                        takePhotoAndSend("🚨 **CẢNH BÁO RUNG LẮC (ESP32-S3 MPU6050):** Phát hiện chuyển động/va chạm lúc ");
+                    }
+                }
+            } catch (err) {
+                espSyncState.innerText = langData[currentLang].espDisconnected;
+            }
+        }
+
+        if (espIp) {
+            espPollInterval = setInterval(pollEspStatus, 2000);
+        }
+    </script>
+</body>
+</html>
