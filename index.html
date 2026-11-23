@@ -43,11 +43,12 @@ video,canvas{width:100%;height:auto;display:block}
     <input type="password" id="webhook" autocomplete="off" placeholder="https://discord.com/api/webhooks/...">
     <button class="main-btn btn-grey" id="btnSave" onclick="saveSettings()" style="width:100%;margin-top:10px;padding:10px;font-size:14px"></button>
     <div class="state" id="espState"></div>
+    <div class="state" id="aiState"></div>
   </div>
 
   <div class="video-container"><video id="webcam" autoplay playsinline muted></video></div>
   <canvas id="canvas" style="display:none"></canvas>
-  <canvas id="hiddenCanvas" width="160" height="120" style="display:none"></canvas>
+  <canvas id="thumbCanvas" width="120" height="120" style="display:none"></canvas>
 
   <div class="box" style="margin-top:12px">
     <div id="samplesLabel" style="color:#94a3b8"></div>
@@ -63,31 +64,35 @@ video,canvas{width:100%;height:auto;display:block}
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.js"></script>
 <script>
 const MQTT_URL = "wss://broker.hivemq.com:8884/mqtt";
-const MATCH_RATIO = 0.35; // tăng lên 0.5 nếu muốn dễ nhận ra chủ nhân hơn
+const MODEL_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model/";
+const FACE_THRESHOLD = 0.55;  // nhỏ hơn = khắt khe hơn (0.45 ~ 0.6). Hay báo nhầm chủ -> tăng lên
+const GRACE_MS = 45000;       // sau khi thấy mặt chủ nhân, bỏ qua cảnh báo trong 45 giây
 
 const video = document.getElementById('webcam');
 const canvas = document.getElementById('canvas');
-const hiddenCanvas = document.getElementById('hiddenCanvas');
-const hCtx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
+const thumbCanvas = document.getElementById('thumbCanvas');
 const statusDiv = document.getElementById('status');
 const btnArm = document.getElementById('btnArm');
 
-let ownerSamples = [], isArmed = false, espArmed = false, espOnline = false;
+let ownerDescriptors = [];
+let isArmed = false, espArmed = false, espOnline = false;
 let lastSentTime = 0, watchInterval = null, currentLang = 'vi';
 let facing = 'user', stream = null, wakeLock = null;
 let client = null, T = {};
 let roomKey = '', webhook = '';
+let modelsReady = false, scanning = false, ownerLastSeen = 0, aiMsg = 'loading';
 
 try { roomKey = localStorage.getItem('roomKey') || ''; webhook = localStorage.getItem('webhook') || ''; } catch (e) {}
 document.getElementById('roomKey').value = roomKey;
 document.getElementById('webhook').value = webhook;
 
 const L = {
-  zh: { heading:"🛡️ 智能防盜監控中心", step1:"步驟 1：請拍攝多張不同角度的主人照片。", step2:"步驟 2：已有樣本，可啟動警戒。", armedDesc:"🚨 警戒中！偵測到陌生人或 ESP32 震動將拍照發送至 Discord。", btnCapture:"📸 拍攝並新增主人照片", btnArmOn:"🚨 啟動警戒模式", btnArmOff:"🛑 關閉警戒模式", samples:"已保存的主人樣本", ready:"相機就緒，請先拍攝至少 1 張主人照片！", captured:"✅ 已新增主人照片！", needSample:"請先拍攝至少 1 張主人照片！", needHook:"請先填入 Discord Webhook！", stranger:"🚨 發現陌生人！正在發送...", motion:"🚨 ESP32 偵測到震動！正在發送...", ownerMoving:"✅ 主人正在移動物品，已忽略", sent:"🚨 照片已發送至 Discord！", netErr:"❌ 網絡錯誤: ", online:"ESP32：在線", offline:"ESP32：離線 / 未連線", on:"（警戒中）", off:"（已解除）", key:"房間代碼（需與 ESP32 相同）", hook:"Discord Webhook", save:"儲存並連線", flip:"🔄 切換前後鏡頭" },
-  vi: { heading:"🛡️ Trạm Chống Trộm Thông Minh", step1:"Bước 1: Chụp nhiều ảnh chủ nhân ở các góc độ/trang phục khác nhau.", step2:"Bước 2: Đã có ảnh mẫu, có thể bật chế độ chống trộm.", armedDesc:"🚨 ĐANG CANH GÁC! Người lạ hoặc rung lắc từ ESP32 sẽ chụp ảnh gửi Discord.", btnCapture:"📸 Chụp & Thêm Ảnh Chủ Nhân", btnArmOn:"🚨 Bật Chế Độ Chống Trộm", btnArmOff:"🛑 Tắt Chế Độ Chống Trộm", samples:"Ảnh mẫu chủ nhân đã lưu", ready:"Camera sẵn sàng, hãy chụp ít nhất 1 ảnh mẫu chủ nhân!", captured:"✅ Đã thêm 1 ảnh mẫu!", needSample:"Hãy chụp ít nhất 1 ảnh mẫu trước!", needHook:"Hãy nhập Discord Webhook trước!", stranger:"🚨 PHÁT HIỆN NGƯỜI LẠ! Đang gửi cảnh báo...", motion:"🚨 ESP32 PHÁT HIỆN RUNG LẮC! Đang gửi ảnh...", ownerMoving:"✅ Chủ nhân đang di chuyển đồ, bỏ qua", sent:"🚨 Đã gửi ảnh về Discord!", netErr:"❌ Lỗi mạng: ", online:"ESP32: Đang online", offline:"ESP32: Offline / chưa kết nối", on:"(ĐANG BẬT)", off:"(ĐÃ TẮT)", key:"Mã phòng (phải giống trong code ESP32)", hook:"Discord Webhook", save:"Lưu & kết nối", flip:"🔄 Đổi camera trước/sau" },
-  en: { heading:"🛡️ Smart Anti-Theft Center", step1:"Step 1: Take several photos of the owner at different angles/outfits.", step2:"Step 2: Samples ready, you can arm the system.", armedDesc:"🚨 ARMED! Strangers or ESP32 motion will send a photo to Discord.", btnCapture:"📸 Capture & Add Owner Photo", btnArmOn:"🚨 Arm System", btnArmOff:"🛑 Disarm System", samples:"Saved owner samples", ready:"Camera ready, capture at least 1 owner photo!", captured:"✅ Owner photo added!", needSample:"Capture at least 1 owner photo first!", needHook:"Enter the Discord Webhook first!", stranger:"🚨 STRANGER DETECTED! Sending...", motion:"🚨 ESP32 MOTION! Sending photo...", ownerMoving:"✅ Owner is moving items, ignored", sent:"🚨 Snapshot sent to Discord!", netErr:"❌ Network error: ", online:"ESP32: Online", offline:"ESP32: Offline / not connected", on:"(ARMED)", off:"(DISARMED)", key:"Room key (must match ESP32 code)", hook:"Discord Webhook", save:"Save & connect", flip:"🔄 Flip camera" }
+  zh: { heading:"🛡️ 智能防盜監控中心", step1:"步驟 1：請拍攝主人臉部照片（正面、左側、右側各一張）。", step2:"步驟 2：已有樣本，可啟動警戒。", armedDesc:"🚨 警戒中！偵測到陌生人或 ESP32 震動將拍照發送至 Discord。", btnCapture:"📸 拍攝並新增主人臉部", btnArmOn:"🚨 啟動警戒模式", btnArmOff:"🛑 關閉警戒模式", samples:"已保存的主人臉部樣本", ready:"相機就緒，請先拍攝至少 1 張主人臉部！", captured:"✅ 已新增主人臉部樣本！", noFace:"❌ 沒有偵測到臉部，請正對鏡頭再試一次", needSample:"請先拍攝至少 1 張主人臉部！", needHook:"請先填入 Discord Webhook！", stranger:"🚨 發現陌生人！正在發送...", motion:"🚨 偵測到異常！正在發送...", ownerMoving:"✅ 主人剛剛出現，已忽略", sent:"🚨 照片已發送至 Discord！", netErr:"❌ 網絡錯誤: ", online:"ESP32：在線", offline:"ESP32：離線 / 未連線", on:"（警戒中）", off:"（已解除）", key:"房間代碼（需與 ESP32 相同）", hook:"Discord Webhook", save:"儲存並連線", flip:"🔄 切換前後鏡頭", ai_loading:"AI：載入臉部模型中...", ai_ready:"AI：臉部辨識已就緒", ai_fail:"AI：模型載入失敗，請檢查網路" },
+  vi: { heading:"🛡️ Trạm Chống Trộm Thông Minh", step1:"Bước 1: Chụp mặt chủ nhân (nên chụp chính diện, nghiêng trái, nghiêng phải mỗi góc 1 ảnh).", step2:"Bước 2: Đã có ảnh mẫu, có thể bật chế độ chống trộm.", armedDesc:"🚨 ĐANG CANH GÁC! Người lạ hoặc rung lắc từ ESP32 sẽ chụp ảnh gửi Discord.", btnCapture:"📸 Chụp & Thêm Khuôn Mặt Chủ Nhân", btnArmOn:"🚨 Bật Chế Độ Chống Trộm", btnArmOff:"🛑 Tắt Chế Độ Chống Trộm", samples:"Mẫu khuôn mặt chủ nhân đã lưu", ready:"Camera sẵn sàng, hãy chụp ít nhất 1 mẫu khuôn mặt chủ nhân!", captured:"✅ Đã thêm 1 mẫu khuôn mặt!", noFace:"❌ Không thấy khuôn mặt, hãy nhìn thẳng vào camera rồi thử lại", needSample:"Hãy chụp ít nhất 1 mẫu khuôn mặt trước!", needHook:"Hãy nhập Discord Webhook trước!", stranger:"🚨 PHÁT HIỆN NGƯỜI LẠ! Đang gửi cảnh báo...", motion:"🚨 PHÁT HIỆN BẤT THƯỜNG! Đang gửi ảnh...", ownerMoving:"✅ Vừa thấy chủ nhân, bỏ qua cảnh báo", sent:"🚨 Đã gửi ảnh về Discord!", netErr:"❌ Lỗi mạng: ", online:"ESP32: Đang online", offline:"ESP32: Offline / chưa kết nối", on:"(ĐANG BẬT)", off:"(ĐÃ TẮT)", key:"Mã phòng (phải giống trong code ESP32)", hook:"Discord Webhook", save:"Lưu & kết nối", flip:"🔄 Đổi camera trước/sau", ai_loading:"AI: Đang tải mô hình nhận diện khuôn mặt...", ai_ready:"AI: Nhận diện khuôn mặt đã sẵn sàng", ai_fail:"AI: Tải mô hình thất bại, kiểm tra mạng" },
+  en: { heading:"🛡️ Smart Anti-Theft Center", step1:"Step 1: Capture the owner's face (front, left and right, one photo each).", step2:"Step 2: Samples ready, you can arm the system.", armedDesc:"🚨 ARMED! Strangers or ESP32 motion will send a photo to Discord.", btnCapture:"📸 Capture Owner Face", btnArmOn:"🚨 Arm System", btnArmOff:"🛑 Disarm System", samples:"Saved owner face samples", ready:"Camera ready, capture at least 1 owner face!", captured:"✅ Owner face sample added!", noFace:"❌ No face detected, look at the camera and try again", needSample:"Capture at least 1 owner face first!", needHook:"Enter the Discord Webhook first!", stranger:"🚨 STRANGER DETECTED! Sending...", motion:"🚨 ANOMALY DETECTED! Sending photo...", ownerMoving:"✅ Owner seen recently, ignored", sent:"🚨 Snapshot sent to Discord!", netErr:"❌ Network error: ", online:"ESP32: Online", offline:"ESP32: Offline / not connected", on:"(ARMED)", off:"(DISARMED)", key:"Room key (must match ESP32 code)", hook:"Discord Webhook", save:"Save & connect", flip:"🔄 Flip camera", ai_loading:"AI: Loading face model...", ai_ready:"AI: Face recognition ready", ai_fail:"AI: Model failed to load, check network" }
 };
 
 function refresh() {
@@ -98,12 +103,56 @@ function refresh() {
   document.getElementById('btnSave').innerText = t.save;
   document.getElementById('btnFlip').innerText = t.flip;
   document.getElementById('btnCapture').innerText = t.btnCapture;
-  document.getElementById('samplesLabel').innerText = t.samples + ` (${ownerSamples.length}):`;
+  document.getElementById('samplesLabel').innerText = t.samples + ` (${ownerDescriptors.length}):`;
   btnArm.innerText = isArmed ? t.btnArmOff : t.btnArmOn;
-  document.getElementById('instruction').innerText = isArmed ? t.armedDesc : (ownerSamples.length ? t.step2 : t.step1);
+  document.getElementById('instruction').innerText = isArmed ? t.armedDesc : (ownerDescriptors.length ? t.step2 : t.step1);
   document.getElementById('espState').innerText = espOnline ? (t.online + ' ' + (espArmed ? t.on : t.off)) : t.offline;
+  document.getElementById('aiState').innerText = t['ai_' + aiMsg];
 }
 function setLang(l) { currentLang = l; refresh(); statusDiv.innerText = isArmed ? L[l].armedDesc : L[l].ready; }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ---------- AI nhận diện khuôn mặt ----------
+async function loadModels() {
+  try {
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+    ]);
+    modelsReady = true; aiMsg = 'ready';
+  } catch (e) { aiMsg = 'fail'; console.error(e); }
+  refresh();
+}
+const detOpts = () => new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.4 });
+
+// Quét 1 khung hình: thấy mặt chủ nhân? thấy mặt lạ?
+async function scanFrame() {
+  if (!modelsReady || scanning || !video.videoWidth) return null;
+  scanning = true;
+  try {
+    const res = await faceapi.detectAllFaces(video, detOpts()).withFaceLandmarks().withFaceDescriptors();
+    let owner = false, stranger = false;
+    for (const r of res) {
+      const best = ownerDescriptors.length
+        ? Math.min(...ownerDescriptors.map(d => faceapi.euclideanDistance(d, r.descriptor)))
+        : 9;
+      if (best <= FACE_THRESHOLD) owner = true; else stranger = true;
+    }
+    if (owner) ownerLastSeen = Date.now();
+    return { faces: res.length, owner, stranger };
+  } catch (e) { return null; }
+  finally { scanning = false; }
+}
+async function scanNow() {
+  for (let i = 0; i < 6; i++) {
+    const r = await scanFrame();
+    if (r) return r;
+    await sleep(300);
+  }
+  return null;
+}
+const ownerRecent = () => Date.now() - ownerLastSeen < GRACE_MS;
 
 // ---------- Camera ----------
 async function startVideo() {
@@ -112,80 +161,74 @@ async function startVideo() {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing }, audio: false });
     video.srcObject = stream;
     keepAwake();
-  } catch (err) {
-    statusDiv.innerText = "Camera Error: " + err;
-  }
+  } catch (err) { statusDiv.innerText = "Camera Error: " + err; }
 }
 function flipCamera() { facing = (facing === 'user') ? 'environment' : 'user'; startVideo(); }
-
 async function keepAwake() {
   try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
 
-// ---------- Owner samples ----------
-function captureOwnerSample() {
-  hCtx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-  const img = hCtx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height);
-  ownerSamples.push(img.data);
-  const tc = document.createElement('canvas');
-  tc.width = hiddenCanvas.width; tc.height = hiddenCanvas.height;
-  tc.getContext('2d').putImageData(img, 0, 0);
-  const el = document.createElement('img');
-  el.src = tc.toDataURL(); el.className = 'thumbnail';
-  document.getElementById('thumbs').appendChild(el);
-  btnArm.style.display = 'block';
+// ---------- Mẫu khuôn mặt chủ nhân ----------
+async function captureOwnerSample() {
+  if (!modelsReady) { statusDiv.innerText = L[currentLang]['ai_' + aiMsg]; return; }
   keepAwake();
+  let result = null;
+  for (let i = 0; i < 6 && !result; i++) {
+    if (scanning) { await sleep(300); continue; }
+    scanning = true;
+    try { result = await faceapi.detectSingleFace(video, detOpts()).withFaceLandmarks().withFaceDescriptor(); }
+    catch (e) {}
+    finally { scanning = false; }
+  }
+  if (!result) { statusDiv.innerText = L[currentLang].noFace; return; }
+
+  ownerDescriptors.push(result.descriptor);
+  const b = result.detection.box;
+  const side = Math.max(b.width, b.height) * 1.6;
+  const sx = Math.max(0, b.x + b.width / 2 - side / 2), sy = Math.max(0, b.y + b.height / 2 - side / 2);
+  const tctx = thumbCanvas.getContext('2d');
+  tctx.drawImage(video, sx, sy, side, side, 0, 0, 120, 120);
+  const el = document.createElement('img');
+  el.src = thumbCanvas.toDataURL(); el.className = 'thumbnail';
+  document.getElementById('thumbs').appendChild(el);
+
+  btnArm.style.display = 'block';
   refresh();
   statusDiv.innerText = L[currentLang].captured;
 }
 
-// Trả về true nếu khung hình hiện tại khớp với một trong các ảnh mẫu chủ nhân
-function isOwnerPresent() {
-  if (ownerSamples.length === 0) return false;
-  hCtx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-  const cur = hCtx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height).data;
-  const total = hiddenCanvas.width * hiddenCanvas.height;
-  for (const s of ownerSamples) {
-    let diff = 0;
-    for (let i = 0; i < cur.length; i += 4) {
-      const d = (Math.abs(cur[i]-s[i]) + Math.abs(cur[i+1]-s[i+1]) + Math.abs(cur[i+2]-s[i+2])) / 3;
-      if (d > 45) diff++;
-    }
-    if (diff <= total * MATCH_RATIO) return true;
-  }
-  return false;
-}
-
-// ---------- Arm / disarm ----------
+// ---------- Bật / tắt ----------
 function setArmedState(s) {
-  if (s && ownerSamples.length === 0) return;
+  if (s && ownerDescriptors.length === 0) return;
   if (isArmed === s) return;
   isArmed = s;
   clearInterval(watchInterval);
   if (isArmed) {
     btnArm.className = 'main-btn btn-danger';
     statusDiv.innerText = L[currentLang].armedDesc;
-    watchInterval = setInterval(compareWithSamples, 1000);
+    watchInterval = setInterval(watchTick, 1000);
   } else {
     btnArm.className = 'main-btn btn-success';
     statusDiv.innerText = L[currentLang].ready;
   }
   refresh();
 }
-
 function toggleSystem() {
-  if (ownerSamples.length === 0) { alert(L[currentLang].needSample); return; }
+  if (ownerDescriptors.length === 0) { alert(L[currentLang].needSample); return; }
   if (client && client.connected) client.publish(T.cmd, espArmed ? '0' : '1');
   else setArmedState(!isArmed);
 }
 
-function compareWithSamples() {
+// Mỗi giây: thấy mặt lạ mà chủ nhân chưa xuất hiện gần đây -> chụp gửi
+async function watchTick() {
   if (!isArmed) return;
-  if (!isOwnerPresent() && Date.now() - lastSentTime > 15000) {
+  const r = await scanFrame();
+  if (!r) return;
+  if (r.stranger && !ownerRecent() && Date.now() - lastSentTime > 15000) {
     lastSentTime = Date.now();
     statusDiv.innerText = L[currentLang].stranger;
-    takePhotoAndSend("🚨 **CẢNH BÁO CHỐNG TRỘM:** Phát hiện người lạ không khớp ảnh mẫu lúc ");
+    takePhotoAndSend("🚨 **CẢNH BÁO CHỐNG TRỘM:** Phát hiện khuôn mặt lạ lúc ");
   }
 }
 
@@ -215,19 +258,22 @@ function connectMqtt() {
   client = mqtt.connect(MQTT_URL, { clientId: 'web-' + Math.random().toString(16).slice(2, 10), reconnectPeriod: 3000, keepalive: 30 });
   client.on('connect', () => client.subscribe([T.state, T.event, T.online]));
   client.on('close', () => { espOnline = false; refresh(); });
-  client.on('message', (topic, msg) => {
+  client.on('message', async (topic, msg) => {
     const m = msg.toString();
     if (topic === T.online) { espOnline = (m === '1'); refresh(); }
     else if (topic === T.state) {
       try { espArmed = !!JSON.parse(m).armed; } catch (e) {}
       setArmedState(espArmed); refresh();
-    } else if (topic === T.event && m === 'motion') {
+    } else if (topic === T.event && (m === 'motion' || m === 'near')) {
       if (!espArmed) return;
-      if (isOwnerPresent()) { statusDiv.innerText = L[currentLang].ownerMoving; return; }
+      await scanNow();                       // quét thêm 1 lần ngay lúc có sự kiện
+      if (ownerRecent()) { statusDiv.innerText = L[currentLang].ownerMoving; return; }
       if (Date.now() - lastSentTime > 8000) {
         lastSentTime = Date.now();
         statusDiv.innerText = L[currentLang].motion;
-        takePhotoAndSend("🚨 **CẢNH BÁO RUNG LẮC (ESP32-S3 MPU6050):** Có người lạ di chuyển đồ vật lúc ");
+        takePhotoAndSend(m === 'near'
+          ? "👀 **THÔNG BÁO:** Có người lạ đứng gần khu vực giám sát lúc "
+          : "🚨 **CẢNH BÁO RUNG LẮC:** Có người lạ di chuyển đồ vật lúc ");
       }
     }
   });
@@ -243,6 +289,7 @@ function saveSettings() {
 startVideo();
 refresh();
 statusDiv.innerText = L[currentLang].ready;
+loadModels();
 connectMqtt();
 </script>
 </body>
